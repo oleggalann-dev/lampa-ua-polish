@@ -18,4 +18,18 @@
 https://oleggalann-dev.github.io/lampa-ua-polish/ua-polish.js
 ```
 
+## Torrentio
+
+Окремий плагін `torrentio.js`: одна кнопка «Torrentio» замість «Торренти» для українського й англійського контенту.
+
+- Джерела: [Torrentio](https://torrentio.strem.fun) (без російських трекерів) і Toloka через парсер LampaUA.
+- Сезони й серії окремими екранами: лише ті, що вийшли, з назвою, датою, кадром і прогресом перегляду.
+- Список релізів з вкладками «Українська / English / Усі»; 4K і файли понад 15 ГБ сірі.
+- Із паку сезону вмикається одразу потрібна серія (через TorrServe на `127.0.0.1:8090`, якщо в Lampa не задано інший).
+- Toloka-роздачі приватні: потрібен ваш ключ (passkey) у **Налаштування → Torrentio**.
+
+```
+https://oleggalann-dev.github.io/lampa-ua-polish/torrentio.js
+```
+
 Шрифт Inter: © The Inter Project Authors, SIL Open Font License 1.1 (див. `FONT-LICENSE-OFL.txt`).
