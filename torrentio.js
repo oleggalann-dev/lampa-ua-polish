@@ -86,11 +86,13 @@
         var data = parse(s);
         var bytes = bytesOf(data.size);
         return {
+            hash: (s.infoHash || '').toLowerCase(),
             data: data,
             // A 🇺🇦 among many flags is a subtitle track, not Ukrainian audio.
             ua: /ukr/i.test(data.langs) || (/🇺🇦/.test(data.langs) && data.flags <= 4),
-            // No language line means an English-only release.
-            en: !data.langs || /🇬🇧|eng/i.test(data.langs),
+            // No language line means an English-only release. Pirate Bay mode keeps "Dual/Multi Audio" (an anime's
+            // dub, a film's original + one dub) and drops only releases flagged with other languages alone.
+            en: !data.langs || /🇬🇧|eng/i.test(data.langs) || (onlyTpb() && !data.flags),
             rank: rankOf(data.date),
             bytes: bytes,
             heavy: rankOf(data.date) == 4 || bytes > HEAVY,
@@ -102,20 +104,24 @@
         };
     }
 
-    // Toloka gives whole-season packs without file numbers: add the torrent to TorrServe, wait for its file list,
-    // then find the episode by file name the way Lampa's own torrent screen does.
+    // Toloka gives whole-season packs without file numbers: the viewer's passkey goes in, then playPack.
     function playToloka(r, object) {
         // Toloka torrents are private: the parser's own passkey may only seed, so the viewer's passkey goes in.
         var passkey = (Lampa.Storage.get('torrentio_toloka_passkey', '') + '').trim();
         if (!passkey) return Lampa.Noty.show('Для Toloka потрібен ваш ключ: Налаштування → Torrentio');
-        var link = (r.MagnetUri || r.Link).replace(/([?&]h=)[^&]*/g, '$1' + passkey);
+        playPack((r.MagnetUri || r.Link).replace(/([?&]h=)[^&]*/g, '$1' + passkey), r.Title, 'Toloka', object);
+    }
+
+    // A torrent without file numbers: add it to TorrServe, wait for its file list, then find the episode by file
+    // name the way Lampa's own torrent screen does (a film: the largest video).
+    function playPack(link, title, source, object) {
         var post = function (body) {
             return fetch(server() + '/torrents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
                 .then(function (res) { return res.json(); });
         };
         var stopped = false;
         Lampa.Loading.start(function () { stopped = true; Lampa.Loading.stop(); });
-        post({ action: 'add', link: link, title: r.Title, save_to_db: false }).then(function (t) {
+        post({ action: 'add', link: link, title: title, save_to_db: false }).then(function (t) {
             var tries = 0;
             (function poll() {
                 if (stopped) return;
@@ -123,7 +129,7 @@
                     if (!info.file_stats) {
                         if (++tries < 30) return setTimeout(poll, 2000);
                         Lampa.Loading.stop();
-                        return Lampa.Noty.show('Toloka: не вдалося отримати список файлів');
+                        return Lampa.Noty.show(source + ': не вдалося отримати список файлів');
                     }
                     Lampa.Loading.stop();
                     var videos = info.file_stats.filter(function (f) { return /\.(mkv|mp4|avi|m4v|ts|mov)$/i.test(f.path); });
@@ -131,6 +137,8 @@
                         var p = Lampa.Torserver.parse({ movie: object.movie, files: videos, filename: f.path.split('/').pop(), path: f.path });
                         return p.episode == object.episode && (!p.season || p.season == object.season);
                     })[0] : videos.sort(function (a, b) { return b.length - a.length; })[0];
+                    // A single-episode torrent names its episode in the release, not always in the file.
+                    if (!file && object.season && videos.length == 1) file = videos[0];
                     if (!file) return Lampa.Noty.show('У цьому релізі немає серії ' + object.episode);
                     playUrl(server() + '/stream/' + encodeURIComponent(file.path.split('/').pop()) + '?link=' + t.hash + '&index=' + file.id + '&play', object);
                 }, function () { Lampa.Loading.stop(); Lampa.Noty.show('TorrServe не відповідає'); });
@@ -170,6 +178,60 @@
             .catch(function () { return []; });
     }
 
+    // Torrentio maps Pirate Bay releases to IMDb with a lag (a season out a week had none), so Pirate Bay mode also
+    // asks Pirate Bay's own API. Its JSON has no CORS header: Lampa's native request goes around that on Android.
+    function apibay(query) {
+        return new Promise(function (resolve) {
+            var network = new Lampa.Reguest();
+            network.timeout(15000);
+            network.native('https://apibay.org/q.php?q=' + encodeURIComponent(query), function (json) {
+                try { resolve(typeof json == 'string' ? JSON.parse(json) : json || []); } catch (e) { resolve([]); }
+            }, function () { resolve([]); });
+        });
+    }
+
+    // S02E01, S02 (a season pack), S01-S02 or "Season 2"; a release naming no season is left out.
+    function fitsEpisode(name, season, episode) {
+        var m = name.match(/S(\d{1,2})E(\d{1,3})/i);
+        if (m) return +m[1] == season && +m[2] == episode;
+        m = name.match(/S(\d{1,2})\s*-\s*S?(\d{1,2})\b/i);
+        if (m) return season >= +m[1] && season <= +m[2];
+        m = name.match(/\bS(\d{1,2})\b|Season\s*(\d{1,2})/i);
+        return !!m && +(m[1] || m[2]) == season;
+    }
+
+    function pirateRows(object) {
+        var movie = object.movie;
+        var name = (movie.original_name || movie.original_title || movie.name || movie.title || '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        var queries = [movie.imdb_id];
+        // Season packs often carry no IMDb tag.
+        if (object.season) queries.push(name + ' S' + (object.season < 10 ? '0' : '') + object.season);
+        return Promise.all(queries.filter(Boolean).map(apibay)).then(function (lists) {
+            var seen = {};
+            return [].concat.apply([], lists).filter(function (r) {
+                var hash = (r.info_hash || '').toLowerCase();
+                if (!hash || r.id == '0' || seen[hash] || !/^2/.test(r.category)) return false;
+                seen[hash] = true;
+                if (/dublado|latino|castellano|hindi|tamil|telugu|truefrench|\bvff?\b|\brus\b/i.test(r.name) && !/eng/i.test(r.name)) return false;
+                return object.season ? fitsEpisode(r.name, object.season, object.episode) : true;
+            }).map(function (r) {
+                var rank = rankOf(r.name);
+                var bytes = +r.size;
+                var magnet = 'magnet:?xt=urn:btih:' + r.info_hash + '&dn=' + encodeURIComponent(r.name) + TRACKERS.map(function (t) { return '&tr=' + encodeURIComponent(t); }).join('');
+                return {
+                    hash: r.info_hash.toLowerCase(),
+                    data: { title: r.name, date: ['', '', '720p', '1080p', '4k'][rank], tracker: 'ThePirateBay', seeds: +r.seeders, size: Lampa.Utils.bytesToSize(bytes) },
+                    en: true,
+                    rank: rank,
+                    bytes: bytes,
+                    // A season pack is many episodes, so only 4K marks it heavy.
+                    heavy: rank == 4 || (!object.season && bytes > HEAVY),
+                    enter: function () { playPack(magnet, r.name, 'Pirate Bay', object); }
+                };
+            });
+        });
+    }
+
     function streamRows(object) {
         var tpb = onlyTpb();
         // Pirate Bay: best-seeded first within a quality, so the popular small encodes are not cut by the limit.
@@ -179,8 +241,12 @@
             .then(function (json) { return (json.streams || []).map(function (s) { return torrentioRow(s, object); }); })
             .then(function (rows) { return tpb ? rows.filter(function (r) { return r.en; }) : rows; })
             .catch(function () { return []; });
-        return Promise.all([torrentio, tpb ? [] : tolokaRows(object)]).then(function (lists) {
-            return lists[0].concat(lists[1]).sort(function (a, b) {
+        var extra = tpb ? pirateRows(object).catch(function () { return []; }) : tolokaRows(object);
+        return Promise.all([torrentio, extra]).then(function (lists) {
+            // The same release from both: keep Torrentio's, which already knows the episode's file.
+            var known = {};
+            lists[0].forEach(function (r) { known[r.hash] = true; });
+            return lists[0].concat(lists[1].filter(function (r) { return !r.hash || !known[r.hash]; })).sort(function (a, b) {
                 return b.rank - a.rank || (tpb ? b.data.seeds - a.data.seeds : b.bytes - a.bytes);
             });
         });
