@@ -27,6 +27,7 @@ https://oleggalann-dev.github.io/lampa-ua-polish/ua-polish.js
 - Список релізів з вкладками «Українська / English / Усі»; 4K і файли понад 15 ГБ сірі.
 - Із паку сезону вмикається одразу потрібна серія (через TorrServe на `127.0.0.1:8090`, якщо в Lampa не задано інший).
 - Toloka-роздачі приватні: потрібен ваш ключ (passkey) у **Налаштування → Torrentio**.
+- **Налаштування → Torrentio → Джерело**: «Лише The Pirate Bay (англійською)» (типово) — тільки англомовні релізи з Pirate Bay, без Toloka і вкладок; «Усі трекери + Toloka» — як раніше.
 
 ```
 https://oleggalann-dev.github.io/lampa-ua-polish/torrentio.js

@@ -5,7 +5,7 @@
     // screeners, cams and 3D; at most 5 per quality, best quality first.
     var PROVIDERS = 'yts,eztv,rarbg,1337x,ext,thepiratebay,kickasstorrents,torrentgalaxy,magnetdl,horriblesubs,nyaasi,tokyotosho,anidex,nekobt,' +
         'comando,bludv,micoleaodublado,torrent9,ilcorsaronero,mejortorrent,wolfmax4k,cinecalidad,besttorrents';
-    var BASE = 'https://torrentio.strem.fun/providers=' + PROVIDERS + '|qualityfilter=brremux,scr,cam,threed|limit=5|sort=qualitysize';
+    var OPTIONS = '|qualityfilter=brremux,scr,cam,threed|limit=5|sort=qualitysize';
     // Toloka through the LampaUA Jackett (the one Ukrainian parser that answers); only toloka results are kept.
     var TOLOKA = 'http://lampaua.mooo.com/api/v2.0/indexers/all/results?apikey=&Query=';
     var TRACKERS = ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.demonii.com:1337/announce', 'udp://tracker.torrent.eu.org:451/announce'];
@@ -18,6 +18,11 @@
         // Heavy releases stall this TV: greyed, but kept in their sorted place.
         '.torrent-item.torrentio-heavy{opacity:.45}.torrent-item.torrentio-heavy.focus{opacity:.8}' +
         '</style>');
+
+    // "tpb": only The Pirate Bay, only English releases, no Toloka and no language tabs.
+    function onlyTpb() {
+        return Lampa.Storage.field('torrentio_source') == 'tpb';
+    }
 
     function server() {
         // shortcut: assumes the TorrServe app on this TV at 127.0.0.1:8090 when Lampa has no TorrServe address set.
@@ -166,12 +171,18 @@
     }
 
     function streamRows(object) {
-        var torrentio = fetch(BASE + '/stream/' + object.type + '/' + object.id + '.json')
+        var tpb = onlyTpb();
+        // Pirate Bay: best-seeded first within a quality, so the popular small encodes are not cut by the limit.
+        var base = 'https://torrentio.strem.fun/providers=' + (tpb ? 'thepiratebay' + OPTIONS.replace('limit=5|sort=qualitysize', 'limit=8|sort=quality') : PROVIDERS + OPTIONS);
+        var torrentio = fetch(base + '/stream/' + object.type + '/' + object.id + '.json')
             .then(function (res) { return res.json(); })
             .then(function (json) { return (json.streams || []).map(function (s) { return torrentioRow(s, object); }); })
+            .then(function (rows) { return tpb ? rows.filter(function (r) { return r.en; }) : rows; })
             .catch(function () { return []; });
-        return Promise.all([torrentio, tolokaRows(object)]).then(function (lists) {
-            return lists[0].concat(lists[1]).sort(function (a, b) { return b.rank - a.rank || b.bytes - a.bytes; });
+        return Promise.all([torrentio, tpb ? [] : tolokaRows(object)]).then(function (lists) {
+            return lists[0].concat(lists[1]).sort(function (a, b) {
+                return b.rank - a.rank || (tpb ? b.data.seeds - a.data.seeds : b.bytes - a.bytes);
+            });
         });
     }
 
@@ -198,9 +209,12 @@
         this.build = function (rows) {
             if (!object.level) {
                 all = rows;
-                tab = rows.some(function (r) { return r.ua; }) ? 'ua' : 'en';
-                scroll.append(tabs);
-                drawTabs();
+                if (onlyTpb()) tab = 'all';
+                else {
+                    tab = rows.some(function (r) { return r.ua; }) ? 'ua' : 'en';
+                    scroll.append(tabs);
+                    drawTabs();
+                }
             }
             scroll.append(list);
             fill(object.level ? rows : shown());
@@ -274,6 +288,11 @@
         component: 'torrentio',
         name: 'Torrentio',
         icon: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M8 8v5a4 4 0 0 0 8 0V8" stroke="currentColor" stroke-width="2"/></svg>'
+    });
+    Lampa.SettingsApi.addParam({
+        component: 'torrentio',
+        param: { name: 'torrentio_source', type: 'select', values: { tpb: 'Лише The Pirate Bay (англійською)', all: 'Усі трекери + Toloka' }, default: 'tpb' },
+        field: { name: 'Джерело', description: 'Pirate Bay: лише англомовні релізи, без вкладок мов' }
     });
     Lampa.SettingsApi.addParam({
         component: 'torrentio',
