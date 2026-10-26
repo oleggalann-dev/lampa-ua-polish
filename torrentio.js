@@ -19,9 +19,18 @@
         '.torrent-item.torrentio-heavy{opacity:.45}.torrent-item.torrentio-heavy.focus{opacity:.8}' +
         '</style>');
 
-    // "tpb": only The Pirate Bay, only English releases, no Toloka and no language tabs.
+    // Sources: "tpbtoloka" — English from The Pirate Bay + Ukrainian from Toloka, with language tabs;
+    // "tpb" — only The Pirate Bay, no tabs; "all" — every Torrentio tracker + Toloka.
+    function source() {
+        return Lampa.Storage.field('torrentio_source') || 'tpbtoloka';
+    }
+
+    function usesTpb() {
+        return source() != 'all';
+    }
+
     function onlyTpb() {
-        return Lampa.Storage.field('torrentio_source') == 'tpb';
+        return source() == 'tpb';
     }
 
     function server() {
@@ -92,7 +101,7 @@
             ua: /ukr/i.test(data.langs) || (/🇺🇦/.test(data.langs) && data.flags <= 4),
             // No language line means an English-only release. Pirate Bay mode keeps "Dual/Multi Audio" (an anime's
             // dub, a film's original + one dub) and drops only releases flagged with other languages alone.
-            en: !data.langs || /🇬🇧|eng/i.test(data.langs) || (onlyTpb() && !data.flags),
+            en: !data.langs || /🇬🇧|eng/i.test(data.langs) || (usesTpb() && !data.flags),
             rank: rankOf(data.date),
             bytes: bytes,
             heavy: rankOf(data.date) == 4 || bytes > HEAVY,
@@ -233,7 +242,7 @@
     }
 
     function streamRows(object) {
-        var tpb = onlyTpb();
+        var tpb = usesTpb();
         // Pirate Bay: best-seeded first within a quality, so the popular small encodes are not cut by the limit.
         var base = 'https://torrentio.strem.fun/providers=' + (tpb ? 'thepiratebay' + OPTIONS.replace('limit=5|sort=qualitysize', 'limit=8|sort=quality') : PROVIDERS + OPTIONS);
         var torrentio = fetch(base + '/stream/' + object.type + '/' + object.id + '.json')
@@ -241,13 +250,15 @@
             .then(function (json) { return (json.streams || []).map(function (s) { return torrentioRow(s, object); }); })
             .then(function (rows) { return tpb ? rows.filter(function (r) { return r.en; }) : rows; })
             .catch(function () { return []; });
-        var extra = tpb ? pirateRows(object).catch(function () { return []; }) : tolokaRows(object);
-        return Promise.all([torrentio, extra]).then(function (lists) {
+        var pirate = tpb ? pirateRows(object).catch(function () { return []; }) : [];
+        var toloka = onlyTpb() ? [] : tolokaRows(object);
+        return Promise.all([torrentio, pirate, toloka]).then(function (lists) {
             // The same release from both: keep Torrentio's, which already knows the episode's file.
             var known = {};
             lists[0].forEach(function (r) { known[r.hash] = true; });
-            return lists[0].concat(lists[1].filter(function (r) { return !r.hash || !known[r.hash]; })).sort(function (a, b) {
-                return b.rank - a.rank || (tpb ? b.data.seeds - a.data.seeds : b.bytes - a.bytes);
+            var extra = lists[1].filter(function (r) { return !known[r.hash]; }).concat(lists[2]);
+            return lists[0].concat(extra).sort(function (a, b) {
+                return b.rank - a.rank || (tpb ? (+b.data.seeds || 0) - (+a.data.seeds || 0) : b.bytes - a.bytes);
             });
         });
     }
@@ -357,8 +368,8 @@
     });
     Lampa.SettingsApi.addParam({
         component: 'torrentio',
-        param: { name: 'torrentio_source', type: 'select', values: { tpb: 'Лише The Pirate Bay (англійською)', all: 'Усі трекери + Toloka' }, default: 'tpb' },
-        field: { name: 'Джерело', description: 'Pirate Bay: лише англомовні релізи, без вкладок мов' }
+        param: { name: 'torrentio_source', type: 'select', values: { tpbtoloka: 'Pirate Bay (англійською) + Toloka', tpb: 'Лише The Pirate Bay (англійською)', all: 'Усі трекери + Toloka' }, default: 'tpbtoloka' },
+        field: { name: 'Джерело', description: 'Pirate Bay — лише англомовні релізи; Toloka — українські' }
     });
     Lampa.SettingsApi.addParam({
         component: 'torrentio',
